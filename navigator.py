@@ -17,7 +17,7 @@ class Robort:
         self.prev_pose = None
         self.laser = ()
         self.initial_pose = None
-        self.angle_sensitivity = 30
+        self.angle_sensitivity = 40
         self.proximity_sensitivity = 0.4
         self.is_wall_searching = False
         self.is_spinning = 0
@@ -166,11 +166,26 @@ class Robort:
         if self.angle == 270:
             return y2 - y1
 
+    def tryBreakWall(self):
+        return ["tryBreakWall", True]
+
+    def tryStartWall(self):
+        return ["tryStartWall", True]
+
     def handleQueue(self, twist):
         item = self.queue[0]
         command = item[0]
 
         #print "command:",command
+        if command == "tryBreakWall":
+            if self.angle == 90:
+                self.is_wall_searching = False
+            print "bROKEN?", (not self.is_wall_searching)
+
+        if command == "tryStartWall":
+            self.is_wall_searching = True
+            print "STARTED?", self.is_wall_searching
+
         if command == "move":
             x1 = self.pose.pose.position.x
             y1 = self.pose.pose.position.y
@@ -186,7 +201,7 @@ class Robort:
 
             #print x1, y1, x2, y2, "diff", diff
 
-            twist.linear.x = 0.25
+            twist.linear.x = 1.0
 
             if diff > 0 or (item[2] > 0 and self.hasFrontObstacle()):
                 twist.linear.x = 0
@@ -195,7 +210,7 @@ class Robort:
         if command == "turn":
             sensitivity = 0.9
             dr = self.queue[0][3]
-            twist.angular.z = dr
+            twist.angular.z = dr*0.9
             curr_angle = self.orientationToAngle(self.pose.pose.orientation.z)
             if curr_angle > 270:
                 if self.count >= 0:
@@ -217,6 +232,7 @@ class Robort:
                     self.queue[0][1] = True
                     self.angle = desired_angle % 360
             if dr < 0:
+                #print curr_angle, desired_angle, diff, self.count
                 if diff < -1*sensitivity:
                     self.reverse_flag = True
                     twist.angular.z = 0.1
@@ -248,29 +264,30 @@ class Robort:
                 twist.linear.x = 0.5
             else:
                 self.queue.append(self.leftTurn())
-                self.is_wall_searching = True
+                self.queue.append(self.tryStartWall())
 
         #WALL SEARCHING
         else:
             if self.hasRightObstacle():
                 self.looking_for_right = False
                 if not self.hasFrontObstacle():
-                    twist.linear.x = 0.25
+                    twist.linear.x = 1.0
                 else:
                     print "QUEUE LEFT TURN"
                     self.queue.append(self.leftTurn())
             else:
                 if self.looking_for_right:
                     if not self.hasFrontObstacle():
-                        twist.linear.x = 0.25
+                        twist.linear.x = 1.0
                     else:
                         print "QUEUE LEFT TURN"
                         self.queue.append(self.leftTurn())
-                        if self.is_stuck < 30:
+                        if self.is_stuck < 120:
                             self.looking_for_right = False
                 else:
-                    self.queue.append(self.moveForward(0.3))
+                    self.queue.append(self.moveForward(0.25))
                     self.queue.append(self.rightTurn())
+                    self.queue.append(self.tryBreakWall())
                     self.looking_for_right = True
 
 
@@ -330,11 +347,10 @@ def main():
         dist = robbo.getDistanceTraveled()
         if dist > max_dist:
             max_dist = dist
-        print "max_dist",max_dist
-        print "total_dist",robbo.total_dist
-        print "final_coords", robbo.pose.pose.position.x, robbo.pose.pose.position.y
         if time == 3000:# or dist >= 10.0:
-            #print "max_dist", max_dist
+            print "max_dist",max_dist
+            print "total_dist",robbo.total_dist
+            print "final_coords", robbo.pose.pose.position.x, robbo.pose.pose.position.y
             if max_dist >= 10.0:
                 print "SUCCESS"
             else: print "FAILURE"
