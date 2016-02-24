@@ -29,7 +29,8 @@ class Robort:
         self.moving_forward = 0
         self.queue = []
         self.prev_queue = []
-        self.count = 0
+        self.angle = 90
+        self.looking_for_right = False
 
     def setPose(self, pose):
         if self.initial_pose == None:
@@ -96,15 +97,23 @@ class Robort:
             print self.queue
         self.prev_queue = self.queue[0:]
 
-    def turn(self, mult):
-        return ["turn", 16, 1.0*mult]
-    def leftTurn(self):
-        return self.turn(1)
-    def rightTurn(self):
-        return self.turn(-1)
+    def orientationToAngle(self, orient):
+        return 2*math.degrees(math.asin(orient))
 
-    def moveForward(self, time, amt):
-        return ["move", time, amt]
+    def angleToOrientation(self, angle):
+        angle = angle % 360
+        return math.sin(math.radians(angle/2))
+
+    def turn(self, amt, dir):
+        print "turn,",amt,self.angle,self.angleToOrientation(self.angle+amt)
+        return ["turn", False, self.angleToOrientation(self.angle+amt), dir]
+    def leftTurn(self):
+        return self.turn(90, 1)
+    def rightTurn(self):
+        return self.turn(-90, -1)
+
+    def moveForward(self, dist):
+        return ["move", False, dist, self.pose.pose.position]
 
     def handleQueue(self, twist):
         item = self.queue[0]
@@ -112,24 +121,41 @@ class Robort:
 
         #print "command:",command
         if command == "turn":
-            twist.angular.z = item[2]
-            if self.queue[0][1] == 1:
-                twist.angular.z = item[2]*0.749
+            dir = self.queue[0][3]
+            twist.angular.z = dir
+            curr_angle = self.orientationToAngle(self.pose.pose.orientation.z)
+            desired_angle = self.orientationToAngle(self.queue[0][2])
+            print curr_angle, desired_angle
+            diff = 0
+            if dir > 1 and diff > 0:
+                twist.angular.z = -self.angleToOrientation(diff)
+                self.queue[0][1] = True
+            if dir < 1 and diff < 0:
+                twist.angular.z = -self.angleToOrientation(diff)
+                self.queue[0][1] = True
         if command == "move":
-            twist.linear.x = item[2]
+            twist.linear.x = 0.25
+            x1 = self.pose.pose.position.x
+            y1 = self.pose.pose.position.y
+            x2 = item[3].x
+            y2 = item[3].y
+            dist = self.dist(x1, y1, x2, y2)
+            if dist < 0.25:
+                twist.linear.x = dist
+                self.queue[0][1] = True
             if item[2] > 0 and self.hasFrontObstacle():
                 twist.linear.x = 0
-                self.queue[0][1] = 1
+                self.queue[0][1] = True
 
-
-        self.queue[0][1] -= 1
-        if self.queue[0][1] <= 0:
+        if self.queue[0][1]:
             self.queue = self.queue[1:]
         self.printQueue()
         return twist
 
 
     def navigate(self, twist):
+        #print self.pose.pose.orientation.z
+        #return twist
         if len(self.queue) > 0:
             return self.handleQueue(twist)
 
@@ -143,16 +169,26 @@ class Robort:
         #WALL SEARCHING
         else:
             if self.hasRightObstacle():
+                self.looking_for_right = False
                 if not self.hasFrontObstacle():
                     twist.linear.x = 0.25
                 else:
                     print "QUEUE LEFT TURN"
                     self.queue.append(self.leftTurn())
             else:
-                print "QUEUE FORWARD, RIGHT TURN, FORWARD"
-                self.queue.append(self.moveForward(8, 0.25))
-                self.queue.append(self.rightTurn())
-                self.queue.append(self.moveForward(12, 0.25))
+                if self.looking_for_right:
+                    if not self.hasFrontObstacle():
+                        twist.linear.x = 0.25
+                    else:
+                        print "QUEUE LEFT TURN"
+                        self.queue.append(self.leftTurn())
+                        if self.is_stuck < 30:
+                            self.looking_for_right = False
+                else:
+                    print "QUEUE FORWARD, RIGHT TURN"
+                    self.queue.append(self.moveForward(0.5))
+                    self.queue.append(self.rightTurn())
+                    self.looking_for_right = True
 
 
 
