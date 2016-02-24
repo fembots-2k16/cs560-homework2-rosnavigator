@@ -30,7 +30,12 @@ class Robort:
         self.queue = []
         self.prev_queue = []
         self.angle = 90
+        self.count = 0
+        self.reverse_flag = False
+        self.flip_flag = False
+        self.just_started_turning = False
         self.looking_for_right = False
+        self.total_dist = 0
 
     def setPose(self, pose):
         if self.initial_pose == None:
@@ -69,7 +74,9 @@ class Robort:
 
         #print "x1:",x1,",y1:",y1,",x2:",x2,",y2:",y2
 
-        return self.dist(x1, y1, x2, y2)
+        dist = self.dist(x1, y1, x2, y2)
+        self.total_dist += dist
+        return dist
 
     def dist(self, x1, y1, x2, y2):
         return math.sqrt(math.pow(x2-x1, 2) + math.pow(y2-y1, 2))
@@ -98,57 +105,134 @@ class Robort:
         self.prev_queue = self.queue[0:]
 
     def orientationToAngle(self, orient):
-        return 2*math.degrees(math.asin(orient))
+        angel = 2*math.degrees(math.asin(orient))
+        if angel < 0:
+            angel += 360
+        return angel
 
     def angleToOrientation(self, angle):
-        angle = angle % 360
-        return math.sin(math.radians(angle/2))
+        #angle = angle % 360
+        mult = 1
+        if angle > 180: mult = -1
+        orient = math.sin(math.radians(angle/2))
+        if mult < 0:
+            orient = mult*orient
+        return orient
+
+    def round(self, x):
+        f = math.floor(x)
+        c = math.ceil(x)
+        fdelta = abs(x-f)
+        cdelta = abs(x-c)
+        if fdelta < cdelta: return f
+        return c
 
     def turn(self, amt, dir):
-        print "turn,",amt,self.angle,self.angleToOrientation(self.angle+amt)
-        return ["turn", False, self.angleToOrientation(self.angle+amt), dir]
+        self.just_started_turning = True
+        #print "turn,",amt,self.angle,self.angle+amt
+        return ["turn", False, self.angle+amt, dir]
     def leftTurn(self):
         return self.turn(90, 1)
     def rightTurn(self):
         return self.turn(-90, -1)
+    def properDiffAngle(self, curr_angle, desired_angle, dir):
+        #angels
+        if dir > 0:
+            if self.count < 0:
+                if curr_angle > 270:
+                    curr_angle -= 360
+                else:
+                    self.count = 0
+            elif curr_angle < 0 or (self.count > 0 and curr_angle < desired_angle):
+                curr_angle += 360
+        else:
+            if (curr_angle > 330 or self.count > 0):
+                curr_angle -= 360
+                if self.count >= 0:
+                    self.count += 1
+
+        return curr_angle - desired_angle
+
 
     def moveForward(self, dist):
-        return ["move", False, dist, self.pose.pose.position]
+        return ["move", False, dist, self.pose.pose.position.x, self.pose.pose.position.y]
+    def properDiffDist(self, x1, y1, x2, y2):
+        if self.angle == 0:
+            return x1 - x2
+        if self.angle == 90:
+            return y1 - y2
+        if self.angle == 180:
+            return x2 - x1
+        if self.angle == 270:
+            return y2 - y1
 
     def handleQueue(self, twist):
         item = self.queue[0]
         command = item[0]
 
         #print "command:",command
-        if command == "turn":
-            dir = self.queue[0][3]
-            twist.angular.z = dir
-            curr_angle = self.orientationToAngle(self.pose.pose.orientation.z)
-            desired_angle = self.orientationToAngle(self.queue[0][2])
-            print curr_angle, desired_angle
-            diff = 0
-            if dir > 1 and diff > 0:
-                twist.angular.z = -self.angleToOrientation(diff)
-                self.queue[0][1] = True
-            if dir < 1 and diff < 0:
-                twist.angular.z = -self.angleToOrientation(diff)
-                self.queue[0][1] = True
         if command == "move":
-            twist.linear.x = 0.25
             x1 = self.pose.pose.position.x
             y1 = self.pose.pose.position.y
-            x2 = item[3].x
-            y2 = item[3].y
-            dist = self.dist(x1, y1, x2, y2)
-            if dist < 0.25:
-                twist.linear.x = dist
-                self.queue[0][1] = True
-            if item[2] > 0 and self.hasFrontObstacle():
+
+            x2 = item[3]
+            if self.angle == 0: x2 += item[2]
+            elif self.angle == 180: x2 -= item[2]
+            y2 = item[4]
+            if self.angle == 90: y2 += item[2]
+            elif self.angle == 270: y2 -= item[2]
+
+            diff = self.properDiffDist(x1, y1, x2, y2)
+
+            #print x1, y1, x2, y2, "diff", diff
+
+            twist.linear.x = 0.25
+
+            if diff > 0 or (item[2] > 0 and self.hasFrontObstacle()):
                 twist.linear.x = 0
                 self.queue[0][1] = True
 
+        if command == "turn":
+            sensitivity = 0.9
+            dr = self.queue[0][3]
+            twist.angular.z = dr
+            curr_angle = self.orientationToAngle(self.pose.pose.orientation.z)
+            if curr_angle > 270:
+                if self.count >= 0:
+                    self.flip_flag = True
+                if self.just_started_turning and dr > 0:
+                    self.flip_flag = False
+                    self.count = -1
+            if curr_angle < 45 and self.flip_flag:
+                self.count += 1
+            desired_angle = self.queue[0][2]
+            diff = self.properDiffAngle(curr_angle, desired_angle, dr)
+            if self.reverse_flag and dr > 0: self.count += 1
+            if dr > 0:
+                if diff > sensitivity:
+                    self.reverse_flag = True
+                    twist.angular.z = -0.1
+                elif diff > 0:
+                    twist.angular.z = 0
+                    self.queue[0][1] = True
+                    self.angle = desired_angle % 360
+            if dr < 0:
+                if diff < -1*sensitivity:
+                    self.reverse_flag = True
+                    twist.angular.z = 0.1
+                elif diff < 0:
+                    twist.angular.z = 0
+                    self.queue[0][1] = True
+                    self.angle = desired_angle % 360
+            self.just_started_turning = False
+
         if self.queue[0][1]:
             self.queue = self.queue[1:]
+            self.count = 0
+            self.reverse_flag = False
+            self.flip_flag = False
+            self.just_started_turning = False
+            #print "UNQUEUE"
         self.printQueue()
         return twist
 
@@ -185,8 +269,7 @@ class Robort:
                         if self.is_stuck < 30:
                             self.looking_for_right = False
                 else:
-                    print "QUEUE FORWARD, RIGHT TURN"
-                    self.queue.append(self.moveForward(0.5))
+                    self.queue.append(self.moveForward(0.3))
                     self.queue.append(self.rightTurn())
                     self.looking_for_right = True
 
@@ -218,7 +301,7 @@ def processPose(pose_msg):
     #    pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w
     #))
 
-def navigator():
+def main():
     global robbo
     ns = "r0"
     pose_sub = rospy.Subscriber('/odom', Odometry, processPose)
@@ -247,8 +330,11 @@ def navigator():
         dist = robbo.getDistanceTraveled()
         if dist > max_dist:
             max_dist = dist
+        print "max_dist",max_dist
+        print "total_dist",robbo.total_dist
+        print "final_coords", robbo.pose.pose.position.x, robbo.pose.pose.position.y
         if time == 3000:# or dist >= 10.0:
-            print "max_dist", max_dist
+            #print "max_dist", max_dist
             if max_dist >= 10.0:
                 print "SUCCESS"
             else: print "FAILURE"
@@ -256,6 +342,6 @@ def navigator():
 
 if __name__ == "__main__":
     try:
-        navigator()
+        main()
     except rospy.ROSInterruptException:
         pass
