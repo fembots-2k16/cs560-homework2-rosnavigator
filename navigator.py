@@ -219,9 +219,9 @@ def navigator():
                         robbo.moving_forward += 1
                         rospy.loginfo("moving forward, WALL SEARCHING, no right")
                         twist.linear.x = 0.5
-            elif robbo.hasRightObstacleManual(0.25):
-                robbo.get_off_the_wall = True
-                robbo.getting_off_the_wall = 0
+            #elif robbo.hasRightObstacleManual(0.25):
+            #    robbo.get_off_the_wall = True
+            #    robbo.getting_off_the_wall = 0
             elif robbo.hasRightObstacle():
                 robbo.is_spinning = 0
                 if not robbo.hasFrontObstacle():
@@ -235,10 +235,15 @@ def navigator():
                         rospy.loginfo("moving forward, WALL SEARCHING, YES RIGHT")
                         twist.linear.x = 0.5
                 elif not robbo.hasLeftObstacle():
-                    if robbo.is_stuck >= 5:
+                    if robbo.is_stuck >= 5 and robbo.is_stuck < 10:
+                        robbo.moving_forward = 0
+                        rospy.loginfo("adjust self, back up and turn left")
+                        twist.angular.z = -1.0
+                        twist.linear.x = -0.5
+                    elif robbo.is_stuck >= 10:
                         robbo.moving_forward = 0
                         rospy.loginfo("adjust self, back up and turn right")
-                        twist.angular.z = -1.0
+                        twist.angular.z = 1.0
                         twist.linear.x = -0.5
                     else:
                         robbo.moving_forward = 0
@@ -249,9 +254,10 @@ def navigator():
                     robbo.moving_forward = 0
                     rospy.loginfo("backing up")
                     twist.linear.x = -0.5
+                    twist.angular.z = -0.5
 
-            if robbo.moving_forward >= 5:
-                robbo.is_wall_searching = False
+            #if robbo.moving_forward >= 5:
+            #    robbo.is_wall_searching = False
 
 
 
