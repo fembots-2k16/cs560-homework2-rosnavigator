@@ -120,9 +120,13 @@ def navigator():
         print "time passed: " + str(time)
         twist = Twist() #values default to 0 when new instance initiated
         if robbo.hasFrontObstacle():
-            if robbo.is_stuck >= 15:
+            if robbo.is_stuck >= 15 and robbo.is_stuck < 30:
                 rospy.loginfo("moving forward")
+                print "is_stuck", robbo.is_stuck
                 twist.linear.x = 0.5
+            elif robbo.is_stuck >= 30:
+                rospy.loginfo("backing up?")
+                twist.linear.x = -0.5
             else:
                 rospy.loginfo("turning left")
                 twist.angular.z = 1.0
@@ -137,11 +141,15 @@ def navigator():
                 if robbo.is_spinning >= 15:
                     robbo.is_wall_searching = False
             else:
-                rospy.loginfo("moving forward")
-                twist.linear.x = 0.5
+                if robbo.hasFrontObstacle() or robbo.is_stuck >= 15:
+                    rospy.loginfo("turning left and backing up?")
+                    twist.linear.x = -0.5
+                    twist.angular.z = 1.0
+                else:
+                    rospy.loginfo("moving forward")
+                    twist.linear.x = 0.5
 
-        #announce move, and publish the message
-        #rospy.loginfo("navigating")
+        #publish the message
         vel_pub.publish(twist)
         rate.sleep()
 
