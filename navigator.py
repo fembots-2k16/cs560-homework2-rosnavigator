@@ -17,12 +17,16 @@ class Robort:
         self.prev_pose = None
         self.laser = ()
         self.initial_pose = None
-        self.angle_sensitivity = 30
-        self.proximity_sensitivity = 0.8
+        self.angle_sensitivity = 15
+        self.proximity_sensitivity = 0.7
         self.is_wall_searching = False
         self.is_spinning = 0
         self.is_stuck = 0
         self.was_i_turning_left = False
+        self.get_off_the_wall = False
+        self.getting_off_the_wall = 0
+        self.non_wall_following_turn_direction = "left"
+        self.moving_forward = 0
 
     def setPose(self, pose):
         if self.initial_pose == None:
@@ -36,6 +40,17 @@ class Robort:
 
         self.prev_pose = self.pose
         self.pose = pose
+
+        angle = self.pose.pose.orientation.z
+        if angle < 0.71 and angle > 0.70:
+            self.is_wall_searching = False
+            self.non_wall_following_turn_direction = "left"
+
+    def switchTurnDirection(self):
+        if self.non_wall_following_turn_direction == "left":
+            self.non_wall_following_turn_direction = "right"
+        else:
+            self.non_wall_following_turn_direction = "left"
 
     def getDistanceTraveled(self):
         x1 = self.initial_pose.pose.position.x
@@ -66,8 +81,10 @@ class Robort:
         return self.hasObstacle(180, self.angle_sensitivity, self.proximity_sensitivity)
     def hasRightObstacle(self):
         return self.hasObstacle(0, self.angle_sensitivity, self.proximity_sensitivity)
-    def hasRightObstacleManual(self, offset, s):
-        return self.hasObstacle(0, offset, s)
+    def hasRightObstacleManual(self, s):
+        return self.hasObstacle(0, self.angle_sensitivity, s)
+    def hasFrontRightObstacle(self):
+        return self.hasObstacle(45, self.angle_sensitivity, self.proximity_sensitivity)
 
     def isWallSearching(self):
         return self.is_wall_searching
@@ -77,6 +94,10 @@ class Robort:
         has_obstacle = False
         i = angle - offset
         while i < angle + offset:
+            if i < 0:
+                i += 1
+                continue
+            if i >= len(self.laser.ranges): break
             has_obstacle = has_obstacle or (self.laser.ranges[i] < s)
             i += 1
         return has_obstacle
@@ -122,44 +143,118 @@ def navigator():
         print "time passed: " + str(time)
         twist = Twist() #values default to 0 when new instance initiated
 
-        if robbo.isWallSearching():
-            if not robbo.hasRightObstacle() and not robbo.hasFrontObstacle():
-                rospy.loginfo("turning right, is_spinning: %i" %(robbo.is_spinning))
-                twist.angular.z = -1.0
-                robbo.is_spinning += 1
-                if robbo.is_spinning >= 15:
-                    robbo.is_wall_searching = False
-            elif robbo.hasRightObstacle and not robbo.hasFrontObstacle():
-                if robbo.is_stuck >= 15:
-                    rospy.loginfo("turning left and backing up?")
-                    twist.linear.x = -0.5
-                    twist.angular.z = 1.0
+        #wall following but we got too close to the wall, try backin up a bit
+        if robbo.get_off_the_wall:
+            robbo.moving_forward = 0
+            rospy.loginfo("GETTING OFF THE WALL")
+            robbo.getting_off_the_wall += 1
+            if robbo.getting_off_the_wall < 10:
+                #move backward
+                twist.linear.x = -0.5
+                #turn left
+                twist.angular.z = -0.5
+            elif robbo.getting_off_the_wall < 18:
+                #turn right
+                twist.angular.z = 0.5
+            else:
+                robbo.get_off_the_wall = False
+        #INITIAL STATE, MOVING FORWARD UNTIL OBSTACLE IS ENCOUNTERED
+        elif not robbo.is_wall_searching:
+            if not robbo.hasFrontObstacle():
+                if not robbo.was_i_turning_left:
+                    if robbo.is_stuck >= 5:
+                        rospy.loginfo("tlnws adjust")
+                        twist.angular.z = 1.0
+                        twist.linear.x = -0.5
+                    else:
+                        rospy.loginfo("moving forward, not wall searching")
+                        twist.linear.x = 0.5
                 else:
-                    rospy.loginfo("moving forward, WALL SEARCHING")
-                    twist.linear.x = 0.5
-            else:
-                #twist.linear.x = 0.5
-                twist.angular.z = -1.0
-        else:
-            if robbo.hasFrontObstacle():
-                rospy.loginfo("turning left")
-                twist.angular.z = 1.0
-                if robbo.is_stuck >= 15:
-                    twist.linear.x = -0.5
-                    twist.angular.z = -1.0
-                robbo.was_i_turning_left = True
-            else:
-                if robbo.was_i_turning_left:
+                    rospy.loginfo("SWITCHING TO WALL SEARCHING")
                     robbo.is_wall_searching = True
                     robbo.is_spinning = 0
                     robbo.was_i_turning_left = False
-                elif robbo.is_stuck >= 15:
-                    rospy.loginfo("turning left and backing up?")
-                    twist.linear.x = -0.5
-                    twist.angular.z = 1.0
+            #        robbo.switchTurnDirection()
+            else:
+                if robbo.non_wall_following_turn_direction == "left":
+                    if robbo.is_stuck >= 5 and robbo.is_stuck < 10:
+                        rospy.loginfo("tlnws adjust")
+                        twist.angular.z = -1.0
+                        twist.linear.x = -0.5
+                    elif robbo.is_stuck >= 10:
+                        rospy.loginfo("tlnws adjust2")
+                        twist.linear.x = -0.5
+                    else:
+                        rospy.loginfo("turning left, not wall searching")
+                        twist.angular.z = 1.0
+                        twist.linear.x = 0.1
+                        robbo.was_i_turning_left = True
                 else:
-                    rospy.loginfo("moving forward")
-                    twist.linear.x = 0.5
+                    rospy.loginfo("turning right, not wall searching")
+                    twist.angular.z = -1.0
+                    twist.linear.x = 0.1
+                    robbo.was_i_turning_left = True
+
+        #WALL FOLLOWING ALGORITHM
+        elif robbo.is_wall_searching:
+            if not robbo.hasRightObstacle():
+                if robbo.is_spinning < 5 or robbo.hasFrontObstacle():
+                    if robbo.is_stuck >= 5:
+                        robbo.moving_forward = 0
+                        rospy.loginfo("adjust self, back up and turn right")
+                        twist.linear.x = -0.5
+                        twist.angular.z = -0.5
+                    else:
+                        robbo.moving_forward = 0
+                        rospy.loginfo("turning right, WALL SEARCHING")
+                        twist.angular.z = -1.0
+                        robbo.is_spinning += 1
+                else:
+                    if robbo.is_stuck >= 5:
+                        robbo.moving_forward = 0
+                        rospy.loginfo("adjust self, back up and turn right")
+                        twist.linear.x = -0.5
+                        twist.angular.z = -0.5
+                    else:
+                        robbo.moving_forward += 1
+                        rospy.loginfo("moving forward, WALL SEARCHING, no right")
+                        twist.linear.x = 0.5
+            elif robbo.hasRightObstacleManual(0.25):
+                robbo.get_off_the_wall = True
+                robbo.getting_off_the_wall = 0
+            elif robbo.hasRightObstacle():
+                robbo.is_spinning = 0
+                if not robbo.hasFrontObstacle():
+                    if robbo.is_stuck >= 5:
+                        robbo.moving_forward = 0
+                        rospy.loginfo("adjust self, back up and turn left")
+                        twist.linear.x = -0.5
+                        twist.angular.z = 0.5
+                    else:
+                        robbo.moving_forward += 1
+                        rospy.loginfo("moving forward, WALL SEARCHING, YES RIGHT")
+                        twist.linear.x = 0.5
+                elif not robbo.hasLeftObstacle():
+                    if robbo.is_stuck >= 5:
+                        robbo.moving_forward = 0
+                        rospy.loginfo("adjust self, back up and turn right")
+                        twist.angular.z = -1.0
+                        twist.linear.x = -0.5
+                    else:
+                        robbo.moving_forward = 0
+                        rospy.loginfo("turning left I guess!, WALL SEARCHING")
+                        twist.angular.z = -1.0
+                        twist.linear.x = -0.5
+                else:
+                    robbo.moving_forward = 0
+                    rospy.loginfo("backing up")
+                    twist.linear.x = -0.5
+
+            if robbo.moving_forward >= 5:
+                robbo.is_wall_searching = False
+
+
+
 
         #publish the message
         vel_pub.publish(twist)
